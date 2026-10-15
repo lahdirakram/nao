@@ -166,9 +166,22 @@ else
     exit 1
 fi
 
+# Run a command as the `nao` user. `su` only works from root: when the container is
+# already started as `nao` (e.g. Kubernetes `runAsUser: 1000`), it prompts for a
+# password and fails, so run the command directly instead.
+as_nao() {
+    shell="$1"
+    shift
+    if [ "$(id -u)" = "$(id -u nao)" ]; then
+        "$shell" -c "$1"
+    else
+        su nao -s "$shell" -c "$1"
+    fi
+}
+
 # The agent writes into the context (discovered MCP specs, query results), so the
 # `nao` user needs write access. A root-owned bind mount is the usual culprit.
-if [ -n "$NAO_DEFAULT_PROJECT_PATH" ] && ! su nao -s /bin/sh -c "test -w '$NAO_DEFAULT_PROJECT_PATH'"; then
+if [ -n "$NAO_DEFAULT_PROJECT_PATH" ] && ! as_nao /bin/sh "test -w '$NAO_DEFAULT_PROJECT_PATH'"; then
     echo "⚠ $NAO_DEFAULT_PROJECT_PATH is not writable by the nao user (uid $(id -u nao))."
     echo "  MCP tool discovery and other context writes will fail."
     echo "  Fix the ownership on the host: chown -R $(id -u nao):$(id -g nao) <context-folder>"
@@ -207,7 +220,7 @@ if [ "$SEED_ON_START" = "true" ]; then
         for _ in $(seq 1 60); do
             if curl -sf -o /dev/null "$SERVER_URL"; then
                 echo "=== Seeding database ==="
-                su nao -s /bin/bash -c "cd /app && bun run apps/backend/scripts/db.seed.ts" || echo "⚠ Seeding failed"
+                as_nao /bin/bash "cd /app && bun run apps/backend/scripts/db.seed.ts" || echo "⚠ Seeding failed"
                 exit 0
             fi
             sleep 2
